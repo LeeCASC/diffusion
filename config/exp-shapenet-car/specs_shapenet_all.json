@@ -1,0 +1,155 @@
+{
+  "Model": "TrDGen",
+
+  "Input": {
+    "task_mode": "batch",
+    "dataset_name": "ShapeNet",
+    "pcd_dir": "/mnt/nvme0n1/datasets/ShapeNet/BaseColor/ShapeNetCore.v2_refine_img_1024_40_ply_13w",
+    "mesh_dir": "/mnt/nvme0n1/datasets/ShapeNet/BaseColor/ShapeNetCore.v2_1024_40_refine_refine_mesh",
+    "render_img_dir": "/mnt/nvme0n1/datasets/ShapeNet/BaseColor/ShapeNetCore.v2_1024_40_refine_pcd_img",
+    "blender_transform": "",
+    "prompt_path": "",
+    "img_num": 40,
+    "split_dir": "data_split/shapenet",
+    "class": "all",
+    "tet_grid_size": 128,
+    "dmtet_input_file": "./tet/cube_{}_tet.npz",
+    "mem_val_num": 24,
+    "dataset_type": "fifo",
+    "chunk_path": "/data/ShapeNet",
+    "chunk_size": 384,
+    "scale": 0.95,
+    "radius": 3,
+    "reso_dpt": [1024, 1024],
+    "reso_rgb": [512, 512]
+  },
+
+  "Pretrain": {
+    "mode": null,
+    "warm_up": 0,
+    "batch_size": 1024,
+    "warmup_iter": 0,
+    "decay": 0.0000,
+    "num_iter": 1000,
+    "sdf_threshold": 0.1,
+    "sdf_scale": 10,
+    "batch_infer": false,
+    "lr": 1e-4,
+    "radius": 0.5
+  },
+
+  "Train": {
+    "num_epochs": 2000,
+    "warm_up": 0,
+    "decay": 0.000,
+    "learning_params": {
+      "init": 1e-4,
+      "sdf_decay": 1.0,
+      "rgb_decay": 1.0
+    },
+    "sup_cfg": {
+      "geo_sup_mode": "rnd",
+      "geo_sig_src": "nvdiffrast",
+      "tex_sup_mode": "blender",
+      "smpl_cam_num": 4,
+      "view_num": 16
+    },
+    "loss_wgt": {
+      "lmbd_rgb": 1.0,
+      "lmbd_reg_lap": 0.01,
+      "kl": 1e-4,
+      "commit": 1.0,
+      "lmbd_kl": 0.00,
+      "lmbd_lpips": 0.1,
+      "lmbd_ulip_loss": false,
+      "lmbd_dssim": 0.0
+    },
+    "randomness":{
+      "lrn_ae_pts_num": 20000,
+      "qry_tf_pts_num": 60000,
+      "xyz_noise_scale": 0.00
+    },
+    "b_size": 1,
+    "gradient_acc": 1,
+    "eva_sub_iter": 128,
+    "eva_all_iter": 1000,
+    "save_checkpoint_iter": 1000,
+    "exp_uv_mesh": false,
+    "random_bg": false,
+    "shift": 0,
+    "init_mdl_path": null,
+    "finetune_mdl_path": "/home/ubuntu/lizihao/MMD3D_pr15/exp-shapenet-all/05_15-18_55_55_finetune/specs_shapenet_all.json",
+    "ulip_flag": false,
+    "ulip_model_path": null
+  },
+
+  "ArchSpecs": {
+    "unet_type": "vae_kl",
+    "autoencoder_type": "ae",
+    "use_3D_aware": false,
+    "fea_concat": true,
+    "tri_enc": "both-dep",
+    "fused_type": "vae_kl",
+    "mlp_bias": true,
+    "geo_type": "flex",
+    "q_plane": false,
+    "random_downsample": false,
+    "latent_dim": 256
+  },
+
+  "DiffSpecs": {
+    "sd_mode": null,
+    "sd_cfg": 100,
+    "sd_lambda": 10,
+    "num_epochs": 1000,
+    "warm_up": 100,
+    "batch_size": 256,
+    "eva_iter": 100,
+    "prediction": "x",
+    "gradient_acc": 1,
+    "lr": 1e-4,
+    "decay": 0.000,
+    "lr_scheduler_type": "constant",
+    "betas_scale": null,
+    "beta_schedule": "linear",
+    "diffusion_zero_snr": false,
+    "diffusion_clip_flag": false,
+    "vae_scaling_factor": 1.0,
+    "noise_offset": 0.1,
+    "input_perturbation": 0.0,
+    "snr_gamma": null,
+    "clip_grad_norm": null,
+    "model_name": "clip-large",
+    "image_dir": "/mnt/nvme0n1/datasets/ShapeNet/BaseColor/ShapeNetCore.v2_1024_40_render_img_new/",
+    "txt_dir": "/mnt/WD_44T/datasets/text2shape/text/captions.tablechair.csv",
+    "random_view": false,
+    "image_resolution": 224,
+    "guidance_scale": 10.0
+  },
+
+  "EncoderSpecs": {
+    "latent_size": 32,
+    "hidden_dim": 64,
+    "color_output": 64,
+    "unet_kwargs": {
+      "depth": 6,
+      "merge_mode": "concat",
+      "start_filts": 64
+    },
+    "plane_resolution": 256
+  },
+
+  "DecoderSpecs": {
+    "c_dim": 32,
+    "unet_kwargs": {
+      "depth": 6,
+      "merge_mode": "concat",
+      "start_filts": 64
+    },
+    "plane_resolution": 256
+  },
+
+  "Output": {
+    "exp_name": "config/exp-shapenet-car"
+  }
+}

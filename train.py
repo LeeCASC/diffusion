@@ -1,6 +1,7 @@
 import os
 import time
 import argparse
+import numpy as np
 from tqdm import tqdm
 from accelerate import Accelerator
 import torch
@@ -115,22 +116,135 @@ class DiffusionTrainer:
                 "num_epochs": self.config.diff_specs.num_epochs
             })
 
+    def save_complete_checkpoint(self, epoch, global_step, avg_loss, filename="final.pth"):
+        """保存完整的训练checkpoint"""
+        if not self.accelerator.is_main_process:
+            return
+        
+        checkpoint = {
+            # 模型状态
+            'model_state_dict': self.model.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            
+            # 训练进度
+            'epoch': epoch,
+            'global_step': global_step,
+            'current_loss': avg_loss,
+            
+            # 早停和最佳模型追踪
+            'best_step_loss': self.best_step_loss,
+            'best_epoch_loss': self.best_epoch_loss,
+            'patience_counter': self.patience_counter,
+            
+            # 训练配置
+            'config_path': self.args.config if hasattr(self.args, 'config') else None,
+            'train_path': self.args.train_path if hasattr(self.args, 'train_path') else None,
+            'tri_dir': self.args.tri_dir if hasattr(self.args, 'tri_dir') else None,
+            'patience': self.patience,
+            'min_delta': self.min_delta,
+            'eval_interval': self.eval_interval,
+            'eval_samples': self.eval_samples,
+            
+            # 时间戳
+            'save_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            
+            # 随机状态（用于完全可重现的训练）
+            'random_state': torch.get_rng_state().cpu(),
+            'numpy_random_state': np.random.get_state(),
+        }
+        
+        # 保存checkpoint
+        checkpoint_path = os.path.join(self.save_dir, filename)
+        torch.save(checkpoint, checkpoint_path)
+        print(f"已保存完整checkpoint: {checkpoint_path}")
+        return checkpoint_path
+
     def load_checkpoint(self, checkpoint_path):
         if not os.path.exists(checkpoint_path):
             print(f"未找到checkpoint: {checkpoint_path}")
-            return
-        state_dict = torch.load(checkpoint_path, map_location=self.accelerator.device)
-        self.model.model.load_state_dict(state_dict)
-        print(f"已加载checkpoint: {checkpoint_path}")
+            return None
+        
+        print(f"正在加载checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.accelerator.device)
+        
+        # 检查是否是完整的checkpoint
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            # 完整checkpoint
+            print("检测到完整checkpoint，正在恢复所有训练状态...")
+            
+            # 恢复模型状态
+            self.model.model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # 恢复优化器和调度器状态
+            if 'optimizer_state_dict' in checkpoint:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                print("已恢复优化器状态")
+            
+            if 'scheduler_state_dict' in checkpoint:
+                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                print("已恢复学习率调度器状态")
+            
+            # 恢复训练进度
+            start_epoch = checkpoint.get('epoch', 0) + 1
+            global_step = checkpoint.get('global_step', 0)
+            
+            # 恢复早停和最佳模型状态
+            self.best_step_loss = checkpoint.get('best_step_loss', float('inf'))
+            self.best_epoch_loss = checkpoint.get('best_epoch_loss', float('inf'))
+            self.patience_counter = checkpoint.get('patience_counter', 0)
+            
+            # 恢复随机状态（可选）
+            if 'random_state' in checkpoint:
+                torch.set_rng_state(checkpoint['random_state'])
+                print("已恢复PyTorch随机状态")
+            if 'numpy_random_state' in checkpoint:
+                np.random.set_state(checkpoint['numpy_random_state'])
+                print("已恢复NumPy随机状态")
+            
+            print(f"已恢复完整训练状态:")
+            print(f"  保存时间: {checkpoint.get('save_time', '未知')}")
+            print(f"  起始epoch: {start_epoch}")
+            print(f"  全局step: {global_step}")
+            print(f"  当前损失: {checkpoint.get('current_loss', '未知'):.6f}")
+            print(f"  最佳step损失: {self.best_step_loss:.6f}")
+            print(f"  最佳epoch损失: {self.best_epoch_loss:.6f}")
+            print(f"  耐心计数: {self.patience_counter}/{self.patience}")
+            
+            return {
+                'start_epoch': start_epoch,
+                'global_step': global_step,
+                'is_complete_checkpoint': True
+            }
+        else:
+            # 旧格式checkpoint（只有模型权重）
+            print("检测到旧格式checkpoint，只恢复模型权重...")
+            self.model.model.load_state_dict(checkpoint)
+            print(f"已加载模型权重: {checkpoint_path}")
+            return {
+                'start_epoch': 0,
+                'global_step': 0,
+                'is_complete_checkpoint': False
+            }
 
     def train(self):
         num_epochs = self.config.diff_specs.num_epochs
+        start_epoch = 0
         global_step = 0
+        
+        # 如果有resume checkpoint，加载它
+        if hasattr(self.args, 'resume') and self.args.resume:
+            resume_info = self.load_checkpoint(self.args.resume)
+            if resume_info:
+                start_epoch = resume_info['start_epoch']
+                global_step = resume_info['global_step']
+        
         if self.accelerator.is_main_process:
             print(f"开始训练，设备: {self.accelerator.device}")
             print(f"总epoch数: {num_epochs}")
+            print(f"起始epoch: {start_epoch + 1}")
             print(f"学习率: {self.config.diff_specs.lr}")
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             self.model.model.train()
             epoch_loss = 0.0
             num_batches = 0
@@ -194,17 +308,30 @@ class DiffusionTrainer:
                     
                     if self.patience_counter >= self.patience:
                         print(f"早停：连续 {self.patience} 个epoch损失未改善，停止训练")
+                        # 早停时保存完整checkpoint
+                        self.save_complete_checkpoint(epoch, global_step, avg_loss, "final.pth")
                         self.should_stop = True
+                        # 早停时也清理显存
+                        self.cleanup_memory()
                         break
                 
                 # 定期验证
                 if (epoch + 1) % self.eval_interval == 0:
                     self.validate_model(epoch)
+        
+        # 训练结束时保存完整checkpoint
         if self.accelerator.is_main_process:
+            avg_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
+            # 保存完整的final checkpoint
+            self.save_complete_checkpoint(epoch, global_step, avg_loss, "final.pth")
+            # 为了兼容性，也保存纯模型权重
             torch.save(self.model.model.state_dict(), os.path.join(self.save_dir, "final_model.pth"))
             print("训练完成！")
             if self.writer:
                 self.writer.close()
+        
+        # 训练结束后清理显存
+        self.cleanup_memory()
 
     def validate_model(self, epoch):
         """
@@ -306,6 +433,61 @@ class DiffusionTrainer:
         metrics['feature_range'] = gen_stats['max'] - gen_stats['min']
         
         return metrics
+    
+    def cleanup_memory(self):
+        """清理所有GPU设备的显存"""
+        try:
+            print("清理显存...")
+            
+            # 删除模型引用
+            if hasattr(self, 'model') and self.model is not None:
+                del self.model
+            
+            # 删除优化器引用
+            if hasattr(self, 'optimizer') and self.optimizer is not None:
+                del self.optimizer
+            
+            # 删除数据加载器引用
+            if hasattr(self, 'train_dataloader') and self.train_dataloader is not None:
+                del self.train_dataloader
+            
+            # 删除scheduler引用
+            if hasattr(self, 'scheduler') and self.scheduler is not None:
+                del self.scheduler
+            
+            # 关闭writer
+            if hasattr(self, 'writer') and self.writer is not None:
+                self.writer.close()
+                del self.writer
+            
+            # 清理accelerator
+            if hasattr(self, 'accelerator') and self.accelerator is not None:
+                # 等待所有进程
+                self.accelerator.wait_for_everyone()
+                
+                # 结束accelerator追踪
+                try:
+                    self.accelerator.end_training()
+                except:
+                    pass
+            
+            # 强制清理所有GPU显存
+            import gc
+            gc.collect()
+            
+            if torch.cuda.is_available():
+                # 清理所有可见的GPU
+                for i in range(torch.cuda.device_count()):
+                    with torch.cuda.device(i):
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                
+                print(f"已清理 {torch.cuda.device_count()} 个GPU设备的显存")
+            
+            print("显存清理完成")
+            
+        except Exception as e:
+            print(f"显存清理时出现错误: {e}")
 
 
 
